@@ -1,0 +1,13 @@
+{
+  "name": "legal-analyzer-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "concurrently --names \"BACKEND,FRONTEND\" --prefix-colors \"cyan,green\" \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "cd backend && \"C:\\Users\\Ayush\\venv_legal_analyzer\\Scripts\\python.exe\" -m uvicorn main:app --host 127.0.0.1 --port 8000",
+    "start:frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

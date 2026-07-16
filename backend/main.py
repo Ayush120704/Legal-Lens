@@ -202,4 +202,40 @@ async def websocket_analysis(websocket: WebSocket, job_id: str):
 # --- Entry point ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    import os
+    import socket
+
+    host = os.environ.get("BACKEND_HOST", "127.0.0.1")
+    port_env = os.environ.get("BACKEND_PORT")
+    ports_to_try = [int(port_env)] if port_env else [8000, 8001, 8002, 8003, 8004]
+
+    def _port_is_available(h, p):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            # Try to bind briefly to check availability
+            s.bind((h, p))
+            s.close()
+            return True
+        except Exception:
+            try:
+                s.close()
+            except Exception:
+                pass
+            return False
+
+    chosen_port = None
+    for p in ports_to_try:
+        if _port_is_available(host, p):
+            chosen_port = p
+            break
+        else:
+            print(f"Port {p} not available on {host}, trying next...")
+
+    if chosen_port is None:
+        print(f"Could not bind to any of the ports: {ports_to_try}.\n" \
+              "Possible causes: another process holds the port, OS reserved the port range, or insufficient permissions.\n" \
+              "You can try setting BACKEND_PORT to a free port or run the process as Administrator.")
+        raise SystemExit(1)
+
+    print(f"Starting server on http://{host}:{chosen_port} (use BACKEND_HOST/BACKEND_PORT to override)")
+    uvicorn.run(app, host=host, port=chosen_port)
