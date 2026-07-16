@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 /**
  * Upload a document for analysis.
@@ -58,8 +58,13 @@ export async function fetchJobStatus(jobId) {
  * @returns {{ stop: () => void }} Call stop() to disconnect.
  */
 export function connectWebSocket(jobId, { onMessage, onError }) {
+  const wsBase = import.meta.env.VITE_API_URL
+    ? import.meta.env.VITE_API_URL.replace(/^http/, 'ws')
+    : null;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws/analysis/${jobId}`;
+  const wsUrl = wsBase
+    ? `${wsBase}/ws/analysis/${jobId}`
+    : `${protocol}//${window.location.host}/ws/analysis/${jobId}`;
   const ws = new WebSocket(wsUrl);
 
   // Keepalive ping every 30 seconds

@@ -150,6 +150,64 @@ The frontend will be available at `http://localhost:3000`.
 | ML/AI | sentence-transformers, scikit-learn, numpy |
 | Vector DB | ChromaDB |
 | Real-Time | WebSocket (native FastAPI) |
+| PDF Parsing | pdfplumber |
+
+---
+
+## Deployment (Railway)
+
+### Prerequisites
+- A [Railway](https://railway.app) account
+- This GitHub repository
+
+### Steps
+
+1. **Push to GitHub** (if not already done):
+   ```bash
+   git remote add origin <your-repo-url>
+   git push -u origin main
+   ```
+
+2. **Create a Railway project**:
+   - Go to [railway.app](https://railway.app) → New Project → **Deploy from GitHub Repo**
+   - Select this repository
+
+3. **Add Backend Service**:
+   - Railway will auto-detect the `backend/Dockerfile`
+   - Set the root directory to `backend` in the service settings
+   - The backend will build with all ML dependencies (may take 5-10 min on first deploy)
+
+4. **Add Frontend Service**:
+   - Add a second service → **Deploy from GitHub Repo** (same repo)
+   - Set the root directory to `frontend`
+   - Railway will build using `frontend/Dockerfile`
+
+5. **Set Environment Variable**:
+   - On the **frontend** service, add environment variable:
+     ```
+     VITE_API_URL=<your-backend-railway-url>
+     ```
+   - The backend URL looks like: `https://backend-xxxx.up.railway.app`
+
+6. **Done!** Your frontend will be live at `https://frontend-xxxx.up.railway.app`
+
+### Local Development
+
+```bash
+# Backend
+cd backend
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 8000
+
+# Frontend (separate terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`
 
 ---
 
