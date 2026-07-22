@@ -1,12 +1,11 @@
 import time
 import asyncio
 from typing import Dict, Any, List, Optional
-from sqlalchemy.orm import Session
 
 from scoring import RiskScoringEngine, split_into_clauses
 from rag.vector_store import get_vector_store
 from database import state_store
-from models import Document, Clause
+from models import Document, Clause, SessionLocal
 from llm_service import llm_service
 
 _scoring_engine = None
@@ -16,8 +15,23 @@ _vector_store = None
 def _get_scoring_engine() -> RiskScoringEngine:
     global _scoring_engine
     if _scoring_engine is None:
-        _scoring_engine = RiskScoringEngine()
+        try:
+            _scoring_engine = RiskScoringEngine()
+        except Exception as e:
+            print(f"WARNING: Failed to initialize RiskScoringEngine: {e}")
+            print("Using lightweight scoring fallback.")
+            from scoring_lightweight import score_clause as lw_score
+            _scoring_engine = _LightweightScoringAdapter(lw_score)
     return _scoring_engine
+
+
+class _LightweightScoringAdapter:
+    """Adapter to make the lightweight scorer look like RiskScoringEngine."""
+    def __init__(self, score_fn):
+        self._score_fn = score_fn
+
+    def score_clause(self, text):
+        return self._score_fn(text)
 
 
 def _get_vector_store():
@@ -124,8 +138,14 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
     }
 
 
-async def analyze_document(job_id: str, text: str, document_id: Optional[int] = None, db: Optional[Session] = None):
+async def analyze_document(job_id: str, text: str, document_id: Optional[int] = None, db_session=None):
+    db = None
     try:
+        if db_session is not None:
+            db = db_session
+        elif document_id is not None:
+            db = SessionLocal()
+
         clauses = split_into_clauses(text)
         total = len(clauses)
         state_store.set_total_clauses(job_id, total)
@@ -148,7 +168,7 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
 
             state_store.append_clause(job_id, clause_result)
 
-            if db and document_id:
+            if db is not None and document_id is not None:
                 db_clause = Clause(
                     document_id=document_id,
                     clause_index=i,
@@ -188,7 +208,7 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
 
         state_store.set_completed(job_id, risk_summary, document_summary)
 
-        if db and document_id:
+        if db is not None and document_id is not None:
             db_doc = db.query(Document).filter(Document.id == document_id).first()
             if db_doc:
                 db_doc.status = "completed"
@@ -201,9 +221,16 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
 
     except Exception as e:
         state_store.set_error(job_id, str(e))
-        if db and document_id:
-            db_doc = db.query(Document).filter(Document.id == document_id).first()
-            if db_doc:
-                db_doc.status = "error"
-                db_doc.error_message = str(e)
-            db.commit()
+        if db is not None and document_id is not None:
+            try:
+                db_doc = db.query(Document).filter(Document.id == document_id).first()
+                if db_doc:
+                    db_doc.status = "error"
+                    db_doc.error_message = str(e)
+                db.commit()
+            except Exception:
+                pass
+        print(f"Analysis failed for job {job_id}: {e}")
+    finally:
+        if db is not None and db_session is None:
+            db.close()

@@ -62,22 +62,47 @@ CATEGORY_KEYWORDS = {
 
 # --- Embedding Cache (loaded once at startup) ---
 _embedding_model = None
+_use_lightweight = False
 
 
 def _get_embedding_model():
-    """Lazy-load the sentence-transformers model."""
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    """Lazy-load the sentence-transformers model, with lightweight fallback."""
+    global _embedding_model, _use_lightweight
+    if _embedding_model is None and not _use_lightweight:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        except Exception as e:
+            print(f"WARNING: Failed to load sentence-transformers model: {e}")
+            print("Falling back to lightweight TF-IDF scorer.")
+            _use_lightweight = True
     return _embedding_model
 
 
 def _compute_embedding(text: str) -> np.ndarray:
-    """Compute a single sentence embedding."""
+    """Compute a single sentence embedding, with lightweight fallback."""
     model = _get_embedding_model()
+    if _use_lightweight:
+        return _compute_lightweight_embedding(text)
     embedding = model.encode(text, convert_to_numpy=True)
     return embedding
+
+
+def _compute_lightweight_embedding(text: str) -> np.ndarray:
+    """Compute a TF-IDF-like term frequency vector as lightweight embedding."""
+    from scoring_lightweight import tokenize, _build_vocab_cache, _ensure_corpus
+    import importlib
+    sl = importlib.import_module('scoring_lightweight')
+    sl._ensure_corpus()
+    vocab = sl._build_vocab_cache
+    tokens = tokenize(text.lower())
+    vec = np.zeros(len(vocab))
+    for t in tokens:
+        if t in vocab:
+            vec[vocab[t]] += 1
+    if np.sum(vec) > 0:
+        vec = vec / np.sum(vec)
+    return vec
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -355,9 +380,15 @@ class RiskScoringEngine:
     def _ensure_corpus_embeddings(self):
         """Compute and cache embeddings for the high-risk corpus."""
         if self._corpus_embeddings is None:
-            self._corpus_embeddings = np.array([
-                _compute_embedding(text) for text in HIGH_RISK_CORPUS
-            ])
+            try:
+                self._corpus_embeddings = np.array([
+                    _compute_embedding(text) for text in HIGH_RISK_CORPUS
+                ])
+            except Exception as e:
+                print(f"WARNING: Failed to compute corpus embeddings: {e}")
+                from scoring_lightweight import _ensure_corpus as lw_ensure
+                lw_ensure()
+                self._corpus_embeddings = np.eye(len(HIGH_RISK_CORPUS))
 
     def score_clause(self, text: str) -> Dict[str, Any]:
         """

@@ -233,7 +233,10 @@ export default function App() {
               )}
 
               {jobStatus && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-2">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mt-2">
+                  {/* Left spacer to center the analysis panel */}
+                  <div className="hidden lg:block"></div>
+
                   <div className={`${activeView === 'dashboard' ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
                     {activeView === 'dashboard' ? (
                       <div className="max-w-3xl">

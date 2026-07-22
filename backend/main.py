@@ -114,8 +114,16 @@ def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PE
 async def startup_event():
     init_db()
     from services.agent import _get_scoring_engine, _get_vector_store
-    _get_scoring_engine()
-    _get_vector_store()
+    try:
+        _get_scoring_engine()
+        print("Scoring engine initialized.")
+    except Exception as e:
+        print(f"Scoring engine init warning (fallback will activate at runtime): {e}")
+    try:
+        _get_vector_store()
+        print("Vector store initialized.")
+    except Exception as e:
+        print(f"Vector store init warning: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -184,7 +192,8 @@ async def upload_document(
     doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=request.text.strip(), title="Pasted Document")
     db.add(doc)
     db.commit()
-    background_tasks.add_task(analyze_document, job_id, request.text.strip(), doc.id, db)
+    db.refresh(doc)
+    background_tasks.add_task(analyze_document, job_id, request.text.strip(), doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": "Analysis started."}
 
 @app.post("/api/session/upload-file")
@@ -230,7 +239,8 @@ async def upload_file(
     doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text.strip(), title=file.filename)
     db.add(doc)
     db.commit()
-    background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id, db)
+    db.refresh(doc)
+    background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": f"Analysis started for {file.filename}."}
 
 @app.get("/api/session/status/{job_id}")
@@ -341,16 +351,33 @@ async def export_document_txt(document_id: int, user: User = Depends(get_current
 @app.post("/api/documents/{document_id}/chat")
 async def chat_with_document(document_id: int, req: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     from llm_service import llm_service
+    from local_chat import answer_question_locally
     doc = db.query(Document).filter(Document.id == document_id, Document.user_id == user.id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    if not llm_service.available:
-        raise HTTPException(status_code=503, detail="LLM service not available. Set OPENAI_API_KEY to enable.")
     clauses = db.query(Clause).filter(Clause.document_id == doc.id).order_by(Clause.clause_index).all()
-    clauses_text = "\n\n".join([f"Clause {c.clause_index} [{c.risk_level.upper()}]: {c.original_text[:500]}" for c in clauses])
-    answer = llm_service.answer_question(doc.original_text[:8000], clauses_text[:4000], req.question)
+    clause_dicts = [{
+        "original_text": c.original_text,
+        "risk_score": c.risk_score,
+        "risk_level": c.risk_level,
+        "category": c.category,
+        "flags": c.flags or [],
+        "suggestions": c.suggestions or [],
+        "pros": c.pros or [],
+        "cons": c.cons or [],
+        "compliance_matches": c.compliance_matches or [],
+    } for c in clauses]
+    answer = None
+    if llm_service.available:
+        clauses_text = "\n\n".join([f"Clause {c.clause_index} [{c.risk_level.upper()}]: {c.original_text[:500]}" for c in clauses])
+        answer = llm_service.answer_question(doc.original_text[:8000], clauses_text[:4000], req.question)
     if not answer:
-        raise HTTPException(status_code=500, detail="Failed to generate answer")
+        answer = answer_question_locally(
+            doc.original_text or "",
+            clause_dicts,
+            doc.document_summary or {},
+            req.question
+        )
     user_msg = ChatMessage(document_id=doc.id, role="user", content=req.question)
     assistant_msg = ChatMessage(document_id=doc.id, role="assistant", content=answer)
     db.add_all([user_msg, assistant_msg])
@@ -412,7 +439,7 @@ async def batch_upload(req: BatchUploadRequest, background_tasks: BackgroundTask
         doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text.strip(), title=f"Batch Document {i + 1}")
         db.add(doc)
         db.flush()
-        background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id, db)
+        background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id)
         results.append({"job_id": job_id, "document_id": doc.id, "title": f"Batch Document {i + 1}"})
     db.commit()
     return {"message": f"Started analysis for {len(results)} documents", "documents": results}
