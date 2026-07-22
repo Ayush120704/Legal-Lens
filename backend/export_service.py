@@ -32,14 +32,20 @@ def generate_csv_report(clauses: List[Dict[str, Any]], risk_summary: Dict[str, A
         "Flags", "Suggestions"
     ])
 
+    def _safe_csv(val):
+        s = str(val)
+        if s and s[0] in ("=", "+", "-", "@", "|"):
+            return "'" + s
+        return s[:200]
+
     for i, clause in enumerate(clauses):
         writer.writerow([
             i + 1,
             clause.get("category", "general"),
             clause.get("risk_level", "low"),
             clause.get("risk_score", 0.0),
-            clause.get("original_text", "")[:200],
-            clause.get("suggested_text", "")[:200],
+            _safe_csv(clause.get("original_text", "")),
+            _safe_csv(clause.get("suggested_text", "")),
             "; ".join(clause.get("flags", [])),
             "; ".join(clause.get("suggestions", [])),
         ])

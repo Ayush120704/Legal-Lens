@@ -26,11 +26,22 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    return response
 
 class ConnectionManager:
     def __init__(self):
@@ -96,11 +107,31 @@ class BatchUploadRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     display_name: Optional[str] = None
 
+# --- Input Sanitization ---
+_MAX_TEXT_LENGTH = settings.MAX_TEXT_LENGTH
+
+def sanitize_text(text: str) -> str:
+    text = text.strip()
+    if not text:
+        return ""
+    if len(text) > _MAX_TEXT_LENGTH:
+        text = text[:_MAX_TEXT_LENGTH]
+    text = text.replace("\x00", "")
+    return text
+
 # --- Rate Limiting ---
 _rate_limit_store: dict = {}
+_last_rate_cleanup: float = time.time()
 
 def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PER_MINUTE, window: int = 60) -> bool:
+    global _last_rate_cleanup
     now = time.time()
+    if now - _last_rate_cleanup > 300:
+        cutoff = now - 120
+        expired = [k for k, v in _rate_limit_store.items() if v and max(v) < cutoff]
+        for k in expired:
+            del _rate_limit_store[k]
+        _last_rate_cleanup = now
     if client_id not in _rate_limit_store:
         _rate_limit_store[client_id] = []
     _rate_limit_store[client_id] = [t for t in _rate_limit_store[client_id] if now - t < window]
@@ -185,15 +216,19 @@ async def upload_document(
 ):
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Document text cannot be empty")
+    if len(request.text) > _MAX_TEXT_LENGTH:
+        raise HTTPException(status_code=413, detail=f"Document text exceeds {_MAX_TEXT_LENGTH} character limit")
+    text = sanitize_text(request.text)
     client_ip = "anonymous"
     if not _check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
     job_id = memory_store.create_job()
-    doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=request.text.strip(), title="Pasted Document")
+    doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text, title="Pasted Document")
     db.add(doc)
     db.commit()
     db.refresh(doc)
-    background_tasks.add_task(analyze_document, job_id, request.text.strip(), doc.id)
+    memory_store.update_job(job_id, user_id=user.id if user else None)
+    background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": "Analysis started."}
 
 @app.post("/api/session/upload-file")
@@ -235,19 +270,27 @@ async def upload_file(
                 raise HTTPException(status_code=400, detail="Could not decode file")
     if not text.strip():
         raise HTTPException(status_code=400, detail="No extractable text found")
+    if len(text) > _MAX_TEXT_LENGTH:
+        raise HTTPException(status_code=413, detail=f"Document text exceeds {_MAX_TEXT_LENGTH} character limit")
+    text = sanitize_text(text)
     job_id = memory_store.create_job()
-    doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text.strip(), title=file.filename)
+    doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text, title=file.filename)
     db.add(doc)
     db.commit()
     db.refresh(doc)
-    background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id)
+    memory_store.update_job(job_id, user_id=user.id if user else None)
+    background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": f"Analysis started for {file.filename}."}
 
 @app.get("/api/session/status/{job_id}")
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, user: Optional[User] = Depends(get_optional_user)):
     job = memory_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    job_owner = job.get("user_id")
+    if job_owner is not None:
+        if not user or user.id != job_owner:
+            raise HTTPException(status_code=403, detail="Access denied")
     return job
 
 @app.get("/api/documents")
@@ -486,7 +529,7 @@ async def websocket_analysis(websocket: WebSocket, job_id: str):
 @app.post("/api/admin/cleanup")
 async def cleanup_old_jobs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     cutoff = datetime.utcnow() - timedelta(hours=settings.JOB_CLEANUP_HOURS)
-    old_docs = db.query(Document).filter(Document.created_at < cutoff).all()
+    old_docs = db.query(Document).filter(Document.user_id == user.id, Document.created_at < cutoff).all()
     count = len(old_docs)
     for doc in old_docs:
         db.delete(doc)
