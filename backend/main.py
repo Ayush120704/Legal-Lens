@@ -2,10 +2,17 @@ import asyncio
 import io
 import json
 import os
+import sys
 import time
 import csv
+from pathlib import Path
 from typing import Optional, List
 from datetime import datetime, timedelta
+
+# Ensure backend directory is on Python path when run from project root
+_backend_dir = str(Path(__file__).resolve().parent)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, UploadFile, File, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -143,6 +150,15 @@ def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PE
 # --- Startup ---
 @app.on_event("startup")
 async def startup_event():
+    # Production config validation (non-blocking)
+    is_prod = any(k in os.environ for k in ("RENDER", "RAILWAY_SERVICE_ID", "FLY_APP_NAME"))
+    if is_prod or os.getenv("PRODUCTION", "").lower() in ("1", "true"):
+        if os.getenv("SECRET_KEY", "").startswith("change-this-to"):
+            print("WARNING: SECRET_KEY is still the placeholder! Set it as an environment variable.")
+        if "sqlite" in settings.DATABASE_URL:
+            print("WARNING: Using SQLite in production. Switch to PostgreSQL for concurrent users.")
+        if not settings.ALLOWED_ORIGINS or all("localhost" in o for o in settings.ALLOWED_ORIGINS):
+            print("WARNING: ALLOWED_ORIGINS only contains localhost. Set it to your frontend domain.")
     init_db()
     from services.agent import _get_scoring_engine, _get_vector_store
     try:

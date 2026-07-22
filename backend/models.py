@@ -4,9 +4,11 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from config import settings
 
 _is_sqlite = "sqlite" in settings.DATABASE_URL
-engine = create_engine(settings.DATABASE_URL, connect_args={"check_same_thread": False} if _is_sqlite else {})
+_is_postgres = "postgresql" in settings.DATABASE_URL
 
 if _is_sqlite:
+    engine = create_engine(settings.DATABASE_URL, connect_args={"check_same_thread": False})
+
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
@@ -15,6 +17,16 @@ if _is_sqlite:
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+elif _is_postgres:
+    engine = create_engine(
+        settings.DATABASE_URL,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+else:
+    engine = create_engine(settings.DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

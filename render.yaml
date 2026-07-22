@@ -1,27 +1,28 @@
 services:
   - type: web
     name: legallens-backend
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11"
+        value: 3.11.0
+      - key: PRODUCTION
+        value: "true"
       - key: SECRET_KEY
         generateValue: true
+      # IMPORTANT: Replace with your actual Vercel frontend URL after deployment
+      - key: ALLOWED_ORIGINS
+        value: https://your-app.vercel.app
+      - key: DATABASE_URL
+        value: sqlite:///./legal_analyzer.db
       - key: OPENAI_API_KEY
         sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "120"
       - key: MAX_UPLOAD_SIZE_MB
-        value: "50"
-
-  - type: static
-    name: legallens-frontend
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    envVars:
-      - key: VITE_API_URL
-        fromService:
-          name: legallens-backend
-          property: url
+        value: "10"
+      - key: MAX_TEXT_LENGTH
+        value: "100000"

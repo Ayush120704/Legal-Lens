@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+_dotenv_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_dotenv_path)
 
 
 class Settings:
