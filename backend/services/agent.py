@@ -1,19 +1,19 @@
 import time
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from sqlalchemy.orm import Session
 
 from scoring import RiskScoringEngine, split_into_clauses
 from rag.vector_store import get_vector_store
 from database import state_store
+from models import Document, Clause
+from llm_service import llm_service
 
-
-# Global scoring engine instance (initialized lazily to avoid import-time model loading)
 _scoring_engine = None
 _vector_store = None
 
 
 def _get_scoring_engine() -> RiskScoringEngine:
-    """Lazy-initialize the scoring engine."""
     global _scoring_engine
     if _scoring_engine is None:
         _scoring_engine = RiskScoringEngine()
@@ -21,7 +21,6 @@ def _get_scoring_engine() -> RiskScoringEngine:
 
 
 def _get_vector_store():
-    """Lazy-initialize the vector store."""
     global _vector_store
     if _vector_store is None:
         _vector_store = get_vector_store()
@@ -29,45 +28,22 @@ def _get_vector_store():
 
 
 def _compute_risk_summary(clauses: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute aggregate risk summary from all analyzed clauses."""
-    high_count = 0
-    medium_count = 0
-    low_count = 0
-    total_score = 0.0
-
-    for clause in clauses:
-        level = clause.get("risk_level", "low")
-        score = clause.get("risk_score", 0.0)
-        total_score += score
-
-        if level == "high":
-            high_count += 1
-        elif level == "medium":
-            medium_count += 1
-        else:
-            low_count += 1
-
+    high_count = sum(1 for c in clauses if c.get("risk_level") == "high")
+    medium_count = sum(1 for c in clauses if c.get("risk_level") == "medium")
+    low_count = sum(1 for c in clauses if c.get("risk_level") == "low")
+    total_score = sum(c.get("risk_score", 0.0) for c in clauses)
     total = len(clauses)
     avg_score = round(total_score / total, 4) if total > 0 else 0.0
-
-    return {
-        "high_risk_count": high_count,
-        "medium_risk_count": medium_count,
-        "low_risk_count": low_count,
-        "average_risk_score": avg_score,
-    }
+    return {"high_risk_count": high_count, "medium_risk_count": medium_count, "low_risk_count": low_count, "average_risk_score": avg_score}
 
 
 def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[str, Any]) -> Dict[str, Any]:
-    """Compute document-level summary with health score, findings, and missing protections."""
     total = len(clauses)
     high = risk_summary["high_risk_count"]
     medium = risk_summary["medium_risk_count"]
     low = risk_summary["low_risk_count"]
     avg_risk = risk_summary["average_risk_score"]
 
-    # Health score: 100 = perfectly safe, 0 = extremely risky
-    # Formula: 100 - (weighted risk deductions)
     high_deduction = high * 20
     medium_deduction = medium * 8
     low_deduction = low * 2
@@ -75,7 +51,6 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
     health_score = max(0, min(100, 100 - high_deduction - medium_deduction - low_deduction - risk_penalty))
     health_score = round(health_score, 1)
 
-    # Overall health classification
     if health_score >= 80:
         overall_health = "good"
     elif health_score >= 60:
@@ -85,17 +60,14 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
     else:
         overall_health = "critical"
 
-    # Generate verdict
-    if overall_health == "good":
-        verdict = "Document appears well-structured with minimal risk."
-    elif overall_health == "moderate":
-        verdict = "Notable risk areas. Negotiate key terms."
-    elif overall_health == "concerning":
-        verdict = "Significant risk exposure. Legal review recommended."
-    else:
-        verdict = "Critical issues detected. Do not sign without major revisions."
+    verdict_map = {
+        "good": "Document appears well-structured with minimal risk.",
+        "moderate": "Notable risk areas. Negotiate key terms.",
+        "concerning": "Significant risk exposure. Legal review recommended.",
+        "critical": "Critical issues detected. Do not sign without major revisions.",
+    }
+    verdict = verdict_map.get(overall_health, "")
 
-    # Key findings
     key_findings = []
     if high > 0:
         key_findings.append(f"{high} of {total} clauses carry high risk.")
@@ -104,11 +76,7 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
     if low > 0:
         key_findings.append(f"{low} of {total} clauses are low risk.")
 
-    # Detect missing protections
-    categories_present = set()
-    for clause in clauses:
-        categories_present.add(clause.get("category", "general"))
-
+    categories_present = set(c.get("category", "general") for c in clauses)
     missing_protections = []
     expected_categories = {
         "warranty": ("warranty", "No warranty clause"),
@@ -118,7 +86,6 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
         "confidentiality": ("confidentiality", "No confidentiality clause"),
         "dispute": ("dispute", "No dispute resolution mechanism"),
     }
-
     for key, (cat, desc) in expected_categories.items():
         if cat not in categories_present:
             missing_protections.append({"key": key, "description": desc})
@@ -127,31 +94,18 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
         missing_descs = [m["description"] for m in missing_protections]
         key_findings.append(f"Missing {len(missing_protections)} protections: {', '.join(missing_descs)}.")
 
-    # Critical issues (high-risk clauses)
     critical_issues = []
     for clause in clauses:
         if clause.get("risk_level") == "high":
             flags = clause.get("flags", [])
             primary_issue = flags[0] if flags else "High risk detected"
-            critical_issues.append({
-                "clause_preview": clause.get("original_text", "")[:100],
-                "risk_score": clause.get("risk_score", 0),
-                "primary_issue": primary_issue,
-            })
+            critical_issues.append({"clause_preview": clause.get("original_text", "")[:100], "risk_score": clause.get("risk_score", 0), "primary_issue": primary_issue})
 
-    # Top risk patterns
     pattern_counts = {}
     for clause in clauses:
         for flag in clause.get("flags", []):
             pattern_counts[flag] = pattern_counts.get(flag, 0) + 1
-
-    top_risk_patterns = [
-        {"pattern": pattern, "count": count}
-        for pattern, count in sorted(pattern_counts.items(), key=lambda x: -x[1])[:5]
-    ]
-
-    # Categories detected
-    categories_detected = list(categories_present)
+    top_risk_patterns = [{"pattern": p, "count": c} for p, c in sorted(pattern_counts.items(), key=lambda x: -x[1])[:5]]
 
     return {
         "overall_health": overall_health,
@@ -166,53 +120,90 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
         "missing_protections": missing_protections,
         "critical_issues": critical_issues,
         "top_risk_patterns": top_risk_patterns,
-        "categories_detected": categories_detected,
+        "categories_detected": list(categories_present),
     }
 
 
-async def analyze_document(job_id: str, text: str):
-    """
-    Background worker that processes a legal document asynchronously.
-
-    Steps:
-        1. Split text into individual clauses
-        2. For each clause, compute risk score, detect category, match compliance
-        3. Broadcast progress via WebSocket
-        4. Compute aggregate summary on completion
-    """
+async def analyze_document(job_id: str, text: str, document_id: Optional[int] = None, db: Optional[Session] = None):
     try:
-        # Step 1: Split into clauses
         clauses = split_into_clauses(text)
         total = len(clauses)
         state_store.set_total_clauses(job_id, total)
 
         scoring_engine = _get_scoring_engine()
-        vector_store = _get_vector_store()
+        vector_store_inst = _get_vector_store()
 
-        # Step 2: Process each clause sequentially
         for i, clause_text in enumerate(clauses):
-            # Score the clause
             clause_result = scoring_engine.score_clause(clause_text)
-
-            # Query ChromaDB for compliance matches
-            compliance_matches = vector_store.query(clause_text, n_results=3)
+            compliance_matches = vector_store_inst.query(clause_text, n_results=3)
             clause_result["compliance_matches"] = compliance_matches
 
-            # Store the clause result
+            if llm_service.available:
+                llm_analysis = llm_service.enhance_clause_analysis(
+                    clause_text, clause_result["risk_level"], clause_result["risk_score"], clause_result["category"]
+                )
+                clause_result["llm_analysis"] = llm_analysis
+                if llm_analysis and "suggested_text" in llm_analysis:
+                    clause_result["suggested_text"] = llm_analysis["suggested_text"]
+
             state_store.append_clause(job_id, clause_result)
 
-            # Small delay to simulate processing and allow WebSocket messages
+            if db and document_id:
+                db_clause = Clause(
+                    document_id=document_id,
+                    clause_index=i,
+                    original_text=clause_result["original_text"],
+                    suggested_text=clause_result.get("suggested_text"),
+                    risk_score=clause_result["risk_score"],
+                    risk_level=clause_result["risk_level"],
+                    cosine_component=clause_result.get("cosine_component", 0.0),
+                    keyword_component=clause_result.get("keyword_component", 0.0),
+                    category=clause_result["category"],
+                    flags=clause_result.get("flags", []),
+                    suggestions=clause_result.get("suggestions", []),
+                    pros=clause_result.get("pros", []),
+                    cons=clause_result.get("cons", []),
+                    quality=clause_result.get("quality", {}),
+                    compliance_matches=compliance_matches,
+                    llm_analysis=clause_result.get("llm_analysis"),
+                )
+                db.add(db_clause)
+
             await asyncio.sleep(0.1)
 
-        # Step 3: Compute final aggregates
         job_data = state_store.get_job(job_id)
         all_clauses = job_data["clauses"]
 
         risk_summary = _compute_risk_summary(all_clauses)
         document_summary = _compute_document_summary(all_clauses, risk_summary)
 
-        # Step 4: Mark as completed
+        if llm_service.available:
+            clauses_for_llm = "\n".join([
+                f"Clause {i+1} [{c.get('risk_level','N/A')}]: {c.get('original_text','')[:300]}"
+                for i, c in enumerate(all_clauses[:20])
+            ])
+            llm_summary = llm_service.generate_document_summary(clauses_for_llm)
+            if llm_summary:
+                document_summary["llm_executive_summary"] = llm_summary
+
         state_store.set_completed(job_id, risk_summary, document_summary)
+
+        if db and document_id:
+            db_doc = db.query(Document).filter(Document.id == document_id).first()
+            if db_doc:
+                db_doc.status = "completed"
+                db_doc.progress = 100
+                db_doc.total_clauses = total
+                db_doc.processed_clauses = total
+                db_doc.risk_summary = risk_summary
+                db_doc.document_summary = document_summary
+            db.commit()
 
     except Exception as e:
         state_store.set_error(job_id, str(e))
+        if db and document_id:
+            db_doc = db.query(Document).filter(Document.id == document_id).first()
+            if db_doc:
+                db_doc.status = "error"
+                db_doc.error_message = str(e)
+            db.commit()

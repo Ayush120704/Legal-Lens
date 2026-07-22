@@ -7,9 +7,17 @@ __pycache__/
 venv/
 .env
 .env.local
+*.egg-info/
+dist/
+build/
+*.egg
 
 # ChromaDB local database
 chroma_db/
+
+# Database
+*.sqlite3
+*.db
 
 # Node
 node_modules/
@@ -28,3 +36,16 @@ Thumbs.db
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docker
+.dockerignore
+
+# Environment
+.env
+.env.*
+!.env.example

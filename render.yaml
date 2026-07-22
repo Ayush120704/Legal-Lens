@@ -8,6 +8,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "50"
 
   - type: static
     name: legallens-frontend

@@ -1,11 +1,14 @@
 {
   "name": "legal-analyzer-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
+  "description": "AI-Driven Legal Document Analyzer - v2.0 with auth, LLM, chat, comparison, export",
   "scripts": {
     "start": "concurrently --names \"BACKEND,FRONTEND\" --prefix-colors \"cyan,green\" \"npm run start:backend\" \"npm run start:frontend\"",
-    "start:backend": "cd backend && \"C:\\Users\\Ayush\\venv_legal_analyzer\\Scripts\\python.exe\" -m uvicorn main:app --host 127.0.0.1 --port 8000",
-    "start:frontend": "cd frontend && npm run dev"
+    "start:backend": "cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload",
+    "start:frontend": "cd frontend && npm run dev",
+    "test:backend": "cd backend && python -m pytest tests/ -v",
+    "build:frontend": "cd frontend && npm run build"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
