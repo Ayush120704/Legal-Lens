@@ -70,7 +70,13 @@ SEED_GUIDELINES = [
 
 class VectorStore:
     def __init__(self, persist_directory: str = None):
-        import chromadb
+        self._collection = None
+        try:
+            import chromadb
+        except Exception as e:
+            print(f"WARNING: Failed to import chromadb: {e}")
+            print("Compliance matching will return empty results.")
+            return
         if persist_directory is None:
             persist_directory = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
         os.makedirs(persist_directory, exist_ok=True)
@@ -81,6 +87,9 @@ class VectorStore:
         )
         self._ensure_seeded()
 
+    def _is_available(self):
+        return self._collection is not None
+
     def _ensure_seeded(self):
         if self._collection.count() == 0:
             ids = [g["id"] for g in SEED_GUIDELINES]
@@ -89,7 +98,7 @@ class VectorStore:
             self._collection.add(ids=ids, documents=documents, metadatas=metadatas)
 
     def query(self, text: str, n_results: int = 3) -> List[Dict[str, Any]]:
-        if self._collection.count() == 0:
+        if not self._is_available() or self._collection.count() == 0:
             return []
         results = self._collection.query(
             query_texts=[text],
@@ -106,15 +115,19 @@ class VectorStore:
         return matches
 
     def get_all_guidelines(self) -> List[Dict[str, Any]]:
-        if self._collection.count() == 0:
+        if not self._is_available() or self._collection.count() == 0:
             return []
         all_data = self._collection.get()
         return [{"id": all_data["ids"][i], "text": all_data["documents"][i], "metadata": all_data["metadatas"][i] if all_data["metadatas"] else {}} for i in range(len(all_data["ids"]))]
 
     def add_guideline(self, gid: str, text: str, metadata: dict = None):
+        if not self._is_available():
+            return
         self._collection.add(ids=[gid], documents=[text], metadatas=[metadata or {}])
 
     def get_count(self) -> int:
+        if not self._is_available():
+            return 0
         return self._collection.count()
 
 

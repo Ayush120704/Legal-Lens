@@ -60,32 +60,17 @@ CATEGORY_KEYWORDS = {
     "force_majeure": ["force majeure", "act of god", "unforeseeable"],
 }
 
-# --- Embedding Cache (loaded once at startup) ---
-_embedding_model = None
-_use_lightweight = False
+# --- Embedding (always uses lightweight TF-IDF to avoid OOM) ---
+_use_lightweight = True
 
 
 def _get_embedding_model():
-    """Lazy-load the sentence-transformers model, with lightweight fallback."""
-    global _embedding_model, _use_lightweight
-    if _embedding_model is None and not _use_lightweight:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-        except Exception as e:
-            print(f"WARNING: Failed to load sentence-transformers model: {e}")
-            print("Falling back to lightweight TF-IDF scorer.")
-            _use_lightweight = True
-    return _embedding_model
+    return None
 
 
 def _compute_embedding(text: str) -> np.ndarray:
-    """Compute a single sentence embedding, with lightweight fallback."""
-    model = _get_embedding_model()
-    if _use_lightweight:
-        return _compute_lightweight_embedding(text)
-    embedding = model.encode(text, convert_to_numpy=True)
-    return embedding
+    """Compute a single sentence embedding using lightweight TF-IDF."""
+    return _compute_lightweight_embedding(text)
 
 
 def _compute_lightweight_embedding(text: str) -> np.ndarray:
