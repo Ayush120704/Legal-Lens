@@ -150,7 +150,6 @@ def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PE
 # --- Startup ---
 @app.on_event("startup")
 async def startup_event():
-    # Production config validation (non-blocking)
     is_prod = any(k in os.environ for k in ("RENDER", "RAILWAY_SERVICE_ID", "FLY_APP_NAME"))
     if is_prod or os.getenv("PRODUCTION", "").lower() in ("1", "true"):
         if os.getenv("SECRET_KEY", "").startswith("change-this-to"):
@@ -160,17 +159,7 @@ async def startup_event():
         if not settings.ALLOWED_ORIGINS or all("localhost" in o for o in settings.ALLOWED_ORIGINS):
             print("WARNING: ALLOWED_ORIGINS only contains localhost. Set it to your frontend domain.")
     init_db()
-    from services.agent import _get_scoring_engine, _get_vector_store
-    try:
-        _get_scoring_engine()
-        print("Scoring engine initialized.")
-    except Exception as e:
-        print(f"Scoring engine init warning (fallback will activate at runtime): {e}")
-    try:
-        _get_vector_store()
-        print("Vector store initialized.")
-    except Exception as e:
-        print(f"Vector store init warning: {e}")
+    print("Database initialized. Heavy models (scoring, vector store) will load on first use.")
 
 @app.on_event("shutdown")
 async def shutdown_event():

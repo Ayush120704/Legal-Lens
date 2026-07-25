@@ -1,5 +1,4 @@
 import os
-import chromadb
 from typing import List, Dict, Any
 
 SEED_GUIDELINES = [
@@ -71,6 +70,7 @@ SEED_GUIDELINES = [
 
 class VectorStore:
     def __init__(self, persist_directory: str = None):
+        import chromadb
         if persist_directory is None:
             persist_directory = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
         os.makedirs(persist_directory, exist_ok=True)

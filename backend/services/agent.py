@@ -2,8 +2,6 @@ import time
 import asyncio
 from typing import Dict, Any, List, Optional
 
-from scoring import RiskScoringEngine, split_into_clauses
-from rag.vector_store import get_vector_store
 from database import state_store
 from models import Document, Clause, SessionLocal
 from llm_service import llm_service
@@ -12,7 +10,8 @@ _scoring_engine = None
 _vector_store = None
 
 
-def _get_scoring_engine() -> RiskScoringEngine:
+def _get_scoring_engine():
+    from scoring import RiskScoringEngine
     global _scoring_engine
     if _scoring_engine is None:
         try:
@@ -35,6 +34,7 @@ class _LightweightScoringAdapter:
 
 
 def _get_vector_store():
+    from rag.vector_store import get_vector_store
     global _vector_store
     if _vector_store is None:
         _vector_store = get_vector_store()
@@ -146,6 +146,7 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
         elif document_id is not None:
             db = SessionLocal()
 
+        from scoring import split_into_clauses
         clauses = split_into_clauses(text)
         total = len(clauses)
         state_store.set_total_clauses(job_id, total)
