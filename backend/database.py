@@ -1,6 +1,6 @@
 import threading
 import time
-import uuid
+from uuid import uuid4
 from typing import Any, Dict, Optional, List
 
 
@@ -19,7 +19,7 @@ class InMemoryStateStore:
     def create_job(self, job_id: Optional[str] = None) -> str:
         """Create a new analysis job and return its ID."""
         if job_id is None:
-            job_id = str(uuid.uuid4())
+            job_id = str(uuid4())
         now = time.time()
         with self._lock:
             self._jobs[job_id] = {
