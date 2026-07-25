@@ -2,7 +2,6 @@ import time
 import asyncio
 from typing import Dict, Any, List, Optional
 
-from database import state_store
 from models import Document, Clause, SessionLocal
 from llm_service import llm_service
 
@@ -25,7 +24,6 @@ def _get_scoring_engine():
 
 
 class _LightweightScoringAdapter:
-    """Adapter to make the lightweight scorer look like RiskScoringEngine."""
     def __init__(self, score_fn):
         self._score_fn = score_fn
 
@@ -144,10 +142,21 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
         from scoring import split_into_clauses
         clauses_text = split_into_clauses(text)
         total = len(clauses_text)
-        state_store.set_total_clauses(job_id, total)
 
         scoring_engine = _get_scoring_engine()
         vector_store_inst = _get_vector_store()
+
+        if document_id is not None:
+            if db_session is not None:
+                db = db_session
+            else:
+                db = SessionLocal()
+            db_doc = db.query(Document).filter(Document.id == document_id).first()
+            if db_doc:
+                db_doc.total_clauses = total
+                db_doc.progress = 0
+                db_doc.processed_clauses = 0
+                db.commit()
 
         analyzed_clauses = []
         for i, clause_text in enumerate(clauses_text):
@@ -163,8 +172,15 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
                 if llm_analysis and "suggested_text" in llm_analysis:
                     clause_result["suggested_text"] = llm_analysis["suggested_text"]
 
-            state_store.append_clause(job_id, clause_result)
             analyzed_clauses.append(clause_result)
+
+            if db is not None:
+                db_doc = db.query(Document).filter(Document.id == document_id).first()
+                if db_doc:
+                    db_doc.processed_clauses = i + 1
+                    db_doc.progress = int(((i + 1) / total) * 100)
+                    db.commit()
+
             await asyncio.sleep(0.1)
 
         risk_summary = _compute_risk_summary(analyzed_clauses)
@@ -179,14 +195,7 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
             if llm_summary:
                 document_summary["llm_executive_summary"] = llm_summary
 
-        state_store.set_completed(job_id, risk_summary, document_summary)
-
-        if document_id is not None:
-            if db_session is not None:
-                db = db_session
-            else:
-                db = SessionLocal()
-
+        if db is not None and document_id is not None:
             for i, clause_result in enumerate(analyzed_clauses):
                 db_clause = Clause(
                     document_id=document_id,
@@ -218,26 +227,19 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
                 db_doc.document_summary = document_summary
             db.commit()
 
-            state_store.clear_clauses(job_id)
             analyzed_clauses.clear()
 
     except Exception as e:
-        state_store.set_error(job_id, str(e))
-        if document_id is not None:
+        if db is not None and document_id is not None:
             try:
-                if db_session is not None:
-                    db = db_session
-                elif db is None:
-                    db = SessionLocal()
-                if db is not None:
-                    db_doc = db.query(Document).filter(Document.id == document_id).first()
-                    if db_doc:
-                        db_doc.status = "error"
-                        db_doc.error_message = str(e)
-                    db.commit()
+                db_doc = db.query(Document).filter(Document.id == document_id).first()
+                if db_doc:
+                    db_doc.status = "error"
+                    db_doc.error_message = str(e)
+                db.commit()
             except Exception:
                 pass
-        print(f"Analysis failed for job {job_id}: {e}")
+        print(f"Analysis failed for document {document_id}: {e}")
     finally:
         if db is not None and db_session is None:
             db.close()

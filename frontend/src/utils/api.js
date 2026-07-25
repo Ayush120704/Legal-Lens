@@ -46,8 +46,6 @@ export const uploadFile = (file) => {
   return api('/session/upload-file', { method: 'POST', formData, headers: getAuthHeaders() });
 };
 
-export const fetchJobStatus = (jobId) => api(`/session/status/${jobId}`);
-
 export const batchUpload = (documents) =>
   api('/session/batch-upload', { method: 'POST', body: { documents }, headers: getAuthHeaders() });
 
@@ -87,57 +85,17 @@ export const getChatHistory = (documentId) =>
 export const compareDocuments = (docIdA, docIdB) =>
   api('/documents/compare', { method: 'POST', body: { document_id_a: docIdA, document_id_b: docIdB }, headers: getAuthHeaders() });
 
-// Admin
-export const cleanupOldJobs = () =>
-  api('/admin/cleanup', { method: 'POST', headers: getAuthHeaders() });
-
-// WebSocket
-export function connectWebSocket(jobId, { onMessage, onError }) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsHost = import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')
-    : window.location.host;
-  const wsUrl = `${protocol}//${wsHost}/ws/analysis/${jobId}`;
-  const ws = new WebSocket(wsUrl);
-
-  let pingInterval = null;
-
-  ws.onopen = () => {
-    pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
-    }, 30000);
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      if (data.type !== 'pong') onMessage(data);
-    } catch (e) { /* ignore */ }
-  };
-
-  ws.onerror = (event) => { if (onError) onError(event); };
-
-  ws.onclose = () => { if (pingInterval) clearInterval(pingInterval); };
-
-  return {
-    stop: () => {
-      if (pingInterval) clearInterval(pingInterval);
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
-    },
-  };
-}
-
-// Polling
-export function pollJobStatus(jobId, intervalMs, onProgress) {
+// Polling — polls the Document endpoint for progress
+export function pollDocumentStatus(documentId, intervalMs, onProgress) {
   let intervalId = null;
   let stopped = false;
 
   const poll = async () => {
     if (stopped) return;
     try {
-      const status = await fetchJobStatus(jobId);
-      onProgress(status);
-      if (status.status === 'completed' || status.status === 'error') stop();
+      const doc = await getDocument(documentId);
+      onProgress(doc);
+      if (doc.status === 'completed' || doc.status === 'error') stop();
     } catch (e) { /* ignore */ }
   };
 

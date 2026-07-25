@@ -14,16 +14,15 @@ from uuid import uuid4
 _backend_dir = str(Path(__file__).resolve().parent)
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, UploadFile, File, Depends, Query
+from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from database import state_store as memory_store
 from services.agent import analyze_document
 from config import settings
-from models import init_db, get_db, User, Document, Clause, ChatMessage
+from models import init_db, get_db, SessionLocal, User, Document, Clause, ChatMessage
 from auth import hash_password, verify_password, create_access_token, get_current_user, get_optional_user
 
 app = FastAPI(
@@ -51,43 +50,6 @@ async def add_security_headers(request, call_next):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     return response
-
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: dict[str, list[WebSocket]] = {}
-        self._lock = asyncio.Lock()
-
-    async def connect(self, job_id: str, websocket: WebSocket):
-        await websocket.accept()
-        async with self._lock:
-            if job_id not in self.active_connections:
-                self.active_connections[job_id] = []
-            self.active_connections[job_id].append(websocket)
-
-    def disconnect(self, job_id: str, websocket: WebSocket):
-        if job_id in self.active_connections:
-            self.active_connections[job_id] = [ws for ws in self.active_connections[job_id] if ws != websocket]
-            if not self.active_connections[job_id]:
-                del self.active_connections[job_id]
-
-    async def broadcast(self, job_id: str, message: dict):
-        if job_id not in self.active_connections:
-            return
-        dead = []
-        for ws in self.active_connections[job_id]:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(job_id, ws)
-
-    def cleanup_stale(self):
-        dead_jobs = [jid for jid, conns in self.active_connections.items() if not conns]
-        for jid in dead_jobs:
-            del self.active_connections[jid]
-
-manager = ConnectionManager()
 
 # --- Request/Response Models ---
 class UploadRequest(BaseModel):
@@ -157,16 +119,6 @@ def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PE
     return True
 
 # --- Startup ---
-async def _periodic_cleanup():
-    """Free memory every 30s by evicting finished in-memory jobs and stale connections."""
-    while True:
-        await asyncio.sleep(30)
-        try:
-            memory_store.cleanup_finished_jobs()
-            manager.cleanup_stale()
-        except Exception:
-            pass
-
 @app.on_event("startup")
 async def startup_event():
     is_prod = any(k in os.environ for k in ("RENDER", "RAILWAY_SERVICE_ID", "FLY_APP_NAME"))
@@ -186,7 +138,6 @@ async def startup_event():
         print(f"Database OK ({'PostgreSQL' if 'postgresql' in settings.DATABASE_URL else 'SQLite'})")
     except Exception as e:
         print(f"Database connection failed: {e}")
-    asyncio.create_task(_periodic_cleanup())
     print("Heavy models (scoring, vector store) will load on first use.")
 
 @app.on_event("shutdown")
@@ -272,10 +223,9 @@ async def upload_document(
     db.refresh(doc)
     doc.status = "processing"
     db.commit()
-    memory_store.create_job(job_id=job_id)
-    memory_store.update_job(job_id, user_id=user.id if user else None)
     background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": "Analysis started."}
+
 
 @app.post("/api/session/upload-file")
 async def upload_file(
@@ -326,27 +276,13 @@ async def upload_file(
     db.refresh(doc)
     doc.status = "processing"
     db.commit()
-    memory_store.create_job(job_id=job_id)
-    memory_store.update_job(job_id, user_id=user.id if user else None)
     background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": f"Analysis started for {file.filename}."}
 
+
 @app.get("/api/session/status/{job_id}")
 async def get_job_status(job_id: str, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
-    job = memory_store.get_job(job_id)
-    if job is not None:
-        job_owner = job.get("user_id")
-        if job_owner is not None:
-            if not user or user.id != job_owner:
-                raise HTTPException(status_code=403, detail="Access denied")
-        return job
-    # Retry once after a short pause in case of DB write propagation delay
-    for attempt in range(2):
-        doc = db.query(Document).filter(Document.job_id == job_id).first()
-        if doc is not None:
-            break
-        if attempt == 0:
-            await asyncio.sleep(0.3)
+    doc = db.query(Document).filter(Document.job_id == job_id).first()
     if doc is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if doc.user_id is not None:
@@ -556,59 +492,7 @@ async def batch_upload(req: BatchUploadRequest, background_tasks: BackgroundTask
         background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id)
         results.append({"job_id": job_id, "document_id": doc.id, "title": f"Batch Document {i + 1}"})
     db.commit()
-    for r in results:
-        memory_store.create_job(job_id=r["job_id"])
-        memory_store.update_job(r["job_id"], user_id=user.id if user else None)
     return {"message": f"Started analysis for {len(results)} documents", "documents": results}
-
-# ==================== WEBSOCKET ====================
-
-@app.websocket("/ws/analysis/{job_id}")
-async def websocket_analysis(websocket: WebSocket, job_id: str):
-    await manager.connect(job_id, websocket)
-    try:
-        last_progress = -1
-        while True:
-            try:
-                msg = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
-                if msg == "ping":
-                    await websocket.send_json({"type": "pong"})
-            except asyncio.TimeoutError:
-                pass
-            job = memory_store.get_job(job_id)
-            if job is None:
-                await websocket.send_json({"type": "error", "message": "Job not found"})
-                break
-            current_progress = job["progress"]
-            if current_progress != last_progress:
-                await websocket.send_json({
-                    "type": "progress",
-                    "progress": current_progress,
-                    "status": job["status"],
-                    "processed_clauses": job["processed_clauses"],
-                    "total_clauses": job["total_clauses"],
-                })
-                last_progress = current_progress
-            if job["status"] in ("completed", "error"):
-                await websocket.send_json({"type": "complete", "status": job["status"], "data": job})
-                break
-            await asyncio.sleep(0.5)
-    except WebSocketDisconnect:
-        manager.disconnect(job_id, websocket)
-    except Exception:
-        manager.disconnect(job_id, websocket)
-
-# ==================== JOB CLEANUP ====================
-
-@app.post("/api/admin/cleanup")
-async def cleanup_old_jobs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    cutoff = datetime.utcnow() - timedelta(hours=settings.JOB_CLEANUP_HOURS)
-    old_docs = db.query(Document).filter(Document.user_id == user.id, Document.created_at < cutoff).all()
-    count = len(old_docs)
-    for doc in old_docs:
-        db.delete(doc)
-    db.commit()
-    return {"message": f"Cleaned up {count} expired documents"}
 
 # ==================== ENTRY POINT ====================
 

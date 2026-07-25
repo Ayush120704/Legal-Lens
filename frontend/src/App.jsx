@@ -7,7 +7,7 @@ import AuthModal from './components/AuthModal';
 import DocumentHistory from './components/DocumentHistory';
 import ChatPanel from './components/ChatPanel';
 import ComparePanel from './components/ComparePanel';
-import { uploadDocument, uploadFile, connectWebSocket, pollJobStatus, getDocument, getProfile } from './utils/api';
+import { uploadDocument, uploadFile, pollDocumentStatus, getDocument, getProfile } from './utils/api';
 
 export default function App() {
   const [jobStatus, setJobStatus] = useState(null);
@@ -20,7 +20,6 @@ export default function App() {
   const [documentId, setDocumentId] = useState(null);
   const [savedDocId, setSavedDocId] = useState(null);
 
-  const wsRef = useRef(null);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -32,7 +31,6 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      if (wsRef.current) wsRef.current.stop();
       if (pollRef.current) pollRef.current.stop();
     };
   }, []);
@@ -51,54 +49,18 @@ export default function App() {
       } else {
         result = await uploadDocument(text);
       }
-      const { job_id, document_id } = result;
+      const { document_id } = result;
       setDocumentId(document_id);
 
-      let wsConnected = false;
-      try {
-        wsRef.current = connectWebSocket(job_id, {
-          onMessage: (data) => {
-            if (data.type === 'progress') {
-              setJobStatus((prev) => ({
-                ...prev,
-                job_id,
-                status: data.status,
-                progress: data.progress,
-                processed_clauses: data.processed_clauses,
-                total_clauses: data.total_clauses,
-              }));
-            } else if (data.type === 'complete') {
-              setJobStatus(data.data);
-              setIsLoading(false);
-              if (document_id) {
-                getDocument(document_id).then(d => setSavedDocId(d.id)).catch(() => {});
-              }
-            } else if (data.type === 'error') {
-              setError(data.message || 'Analysis failed');
-              setIsLoading(false);
-            }
-          },
-          onError: () => { wsConnected = false; },
-        });
-        wsConnected = true;
-      } catch (e) {
-        wsConnected = false;
-      }
-
-      if (!wsConnected) {
-        pollRef.current = pollJobStatus(job_id, 1000, (status) => {
-          setJobStatus(status);
-          if (status.status === 'completed' || status.status === 'error') {
-            setIsLoading(false);
+      pollRef.current = pollDocumentStatus(document_id, 1000, (doc) => {
+        setJobStatus(doc);
+        if (doc.status === 'completed' || doc.status === 'error') {
+          setIsLoading(false);
+          if (doc.status === 'completed' && document_id) {
+            setSavedDocId(document_id);
           }
-        });
-      }
-
-      const initialStatus = await import('./utils/api').then((m) => m.fetchJobStatus(job_id));
-      setJobStatus(initialStatus);
-      if (initialStatus.status === 'completed' || initialStatus.status === 'error') {
-        setIsLoading(false);
-      }
+        }
+      });
     } catch (e) {
       setError(e.message || 'Failed to start analysis');
       setIsLoading(false);
