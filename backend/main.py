@@ -288,15 +288,33 @@ async def upload_file(
     return {"job_id": job_id, "document_id": doc.id, "message": f"Analysis started for {file.filename}."}
 
 @app.get("/api/session/status/{job_id}")
-async def get_job_status(job_id: str, user: Optional[User] = Depends(get_optional_user)):
+async def get_job_status(job_id: str, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
+    # Check in-memory store first (fast path while analysis is running)
     job = memory_store.get_job(job_id)
-    if job is None:
+    if job is not None:
+        job_owner = job.get("user_id")
+        if job_owner is not None:
+            if not user or user.id != job_owner:
+                raise HTTPException(status_code=403, detail="Access denied")
+        return job
+    # Fallback to database (survives server restarts / spin-downs)
+    doc = db.query(Document).filter(Document.job_id == job_id).first()
+    if doc is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    job_owner = job.get("user_id")
-    if job_owner is not None:
-        if not user or user.id != job_owner:
+    if doc.user_id is not None:
+        if not user or user.id != doc.user_id:
             raise HTTPException(status_code=403, detail="Access denied")
-    return job
+    return {
+        "job_id": doc.job_id,
+        "status": doc.status or "processing",
+        "progress": doc.progress or 0,
+        "total_clauses": doc.total_clauses or 0,
+        "processed_clauses": doc.processed_clauses or 0,
+        "risk_summary": doc.risk_summary if doc.risk_summary else {"high_risk_count": 0, "medium_risk_count": 0, "low_risk_count": 0, "average_risk_score": 0.0},
+        "document_summary": doc.document_summary,
+        "clauses": [],
+        "error": doc.error_message,
+    }
 
 @app.get("/api/documents")
 async def list_documents(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
