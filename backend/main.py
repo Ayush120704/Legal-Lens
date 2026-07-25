@@ -251,6 +251,8 @@ async def upload_document(
     db.add(doc)
     db.commit()
     db.refresh(doc)
+    doc.status = "processing"
+    db.commit()
     memory_store.update_job(job_id, user_id=user.id if user else None)
     background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": "Analysis started."}
@@ -302,6 +304,8 @@ async def upload_file(
     db.add(doc)
     db.commit()
     db.refresh(doc)
+    doc.status = "processing"
+    db.commit()
     memory_store.update_job(job_id, user_id=user.id if user else None)
     background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": f"Analysis started for {file.filename}."}
