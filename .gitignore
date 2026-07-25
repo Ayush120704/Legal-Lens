@@ -3,16 +3,20 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
 venv/
-.env
-.env.local
+.venv/
 *.egg-info/
 dist/
 build/
 *.egg
 
-# ChromaDB local database
+# Environment (NEVER commit real keys)
+.env
+.env.*
+!.env.example
+.vercel
+
+# ChromaDB local data
 chroma_db/
 
 # Database
@@ -21,34 +25,18 @@ chroma_db/
 
 # Node
 node_modules/
-dist/
-build/
 .vite/
 
 # OS
 .DS_Store
 Thumbs.db
 *.swp
-*.swo
 
 # IDE
 .vscode/
 .idea/
-*.sublime-project
-*.sublime-workspace
 
 # Testing
+.pytest_cache/
 .coverage
 htmlcov/
-.pytest_cache/
-
-# Docker
-.dockerignore
-
-# Environment
-.env
-.env.*
-!.env.example
-
-.vercel
-.env*
