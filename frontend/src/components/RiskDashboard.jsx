@@ -1,20 +1,5 @@
 import React from 'react';
-import { getAuthHeaders } from '../utils/api';
-
-function downloadExport(documentId, format) {
-  const API_BASE = import.meta.env.VITE_API_URL || '/api';
-  fetch(`${API_BASE}/documents/${documentId}/export/${format}`, { headers: getAuthHeaders() })
-    .then(r => r.blob())
-    .then(blob => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `legallens_report_${documentId}.${format}`;
-      a.click();
-      URL.revokeObjectURL(url);
-    })
-    .catch(() => {});
-}
+import { exportDocument } from '../utils/api';
 
 export default function RiskDashboard({ jobStatus, documentId }) {
   if (!jobStatus) return null;
@@ -85,14 +70,14 @@ export default function RiskDashboard({ jobStatus, documentId }) {
             <div className="glass-panel p-4">
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Export Report</h3>
               <div className="flex gap-2">
-                <button onClick={() => downloadExport(documentId, 'csv')}
+                <button onClick={() => exportDocument(documentId, 'csv')}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent-blue/10 text-accent-blue border border-accent-blue/30 text-xs font-medium hover:bg-accent-blue/20 transition-all">
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
                   CSV
                 </button>
-                <button onClick={() => downloadExport(documentId, 'txt')}
+                <button onClick={() => exportDocument(documentId, 'txt')}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent-green/10 text-accent-green border border-accent-green/30 text-xs font-medium hover:bg-accent-green/20 transition-all">
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

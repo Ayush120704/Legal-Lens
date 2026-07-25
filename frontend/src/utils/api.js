@@ -2,184 +2,132 @@ const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
   : '/api';
 
+export const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
 export function getAuthHeaders() {
   const token = localStorage.getItem('token');
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 }
 
-export async function register(email, password, displayName) {
-  const response = await fetch(`${API_BASE}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, display_name: displayName }),
+async function api(path, options = {}) {
+  const { method = 'GET', body, headers = {}, formData } = options;
+  const isFormData = formData instanceof FormData;
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: isFormData ? { ...getAuthHeaders(), ...headers } : { 'Content-Type': 'application/json', ...getAuthHeaders(), ...headers },
+    body: formData || (body ? JSON.stringify(body) : undefined),
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Registration failed');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Request failed with status ${res.status}`);
   }
-  return response.json();
+  return res.status === 204 ? null : res.json();
 }
 
-export async function login(email, password) {
-  const response = await fetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Login failed');
-  }
-  return response.json();
-}
+// Auth
+export const register = (email, password, displayName) =>
+  api('/auth/register', { method: 'POST', body: { email, password, display_name: displayName } });
 
-export async function getProfile() {
-  const response = await fetch(`${API_BASE}/auth/me`, { headers: getAuthHeaders() });
-  if (!response.ok) throw new Error('Auth failed');
-  return response.json();
-}
+export const login = (email, password) =>
+  api('/auth/login', { method: 'POST', body: { email, password } });
 
-export async function uploadDocument(text) {
-  const response = await fetch(`${API_BASE}/session/upload`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ text }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `Upload failed with status ${response.status}`);
-  }
-  return response.json();
-}
+export const getProfile = () => api('/auth/me', { headers: getAuthHeaders() });
 
-export async function uploadFile(file) {
+export const updateProfile = (data) =>
+  api('/auth/me', { method: 'PUT', body: data, headers: getAuthHeaders() });
+
+// Session / Upload
+export const uploadDocument = (text) =>
+  api('/session/upload', { method: 'POST', body: { text }, headers: getAuthHeaders() });
+
+export const uploadFile = (file) => {
   const formData = new FormData();
   formData.append('file', file);
-  const response = await fetch(`${API_BASE}/session/upload-file`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: formData,
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `File upload failed with status ${response.status}`);
+  return api('/session/upload-file', { method: 'POST', formData, headers: getAuthHeaders() });
+};
+
+export const fetchJobStatus = (jobId) => api(`/session/status/${jobId}`);
+
+export const batchUpload = (documents) =>
+  api('/session/batch-upload', { method: 'POST', body: { documents }, headers: getAuthHeaders() });
+
+// Documents CRUD
+export const listDocuments = () => api('/documents', { headers: getAuthHeaders() });
+
+export const getDocument = (documentId) => api(`/documents/${documentId}`, { headers: getAuthHeaders() });
+
+export const deleteDocument = (documentId) =>
+  api(`/documents/${documentId}`, { method: 'DELETE', headers: getAuthHeaders() });
+
+// Export
+export async function exportDocument(documentId, format) {
+  const headers = getAuthHeaders();
+  const res = await fetch(`${API_BASE}/documents/${documentId}/export/${format}`, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Export failed with status ${res.status}`);
   }
-  return response.json();
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `legallens_report_${documentId}.${format}`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-export async function fetchJobStatus(jobId) {
-  const response = await fetch(`${API_BASE}/session/status/${jobId}`);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `Status fetch failed with status ${response.status}`);
-  }
-  return response.json();
-}
+// Chat
+export const chatWithDocument = (documentId, question) =>
+  api(`/documents/${documentId}/chat`, { method: 'POST', body: { question, document_id: documentId }, headers: getAuthHeaders() });
 
-export async function listDocuments() {
-  const response = await fetch(`${API_BASE}/documents`, { headers: getAuthHeaders() });
-  if (!response.ok) throw new Error('Failed to list documents');
-  return response.json();
-}
+export const getChatHistory = (documentId) =>
+  api(`/documents/${documentId}/chat/history`, { headers: getAuthHeaders() });
 
-export async function getDocument(documentId) {
-  const response = await fetch(`${API_BASE}/documents/${documentId}`, { headers: getAuthHeaders() });
-  if (!response.ok) throw new Error('Failed to get document');
-  return response.json();
-}
+// Compare
+export const compareDocuments = (docIdA, docIdB) =>
+  api('/documents/compare', { method: 'POST', body: { document_id_a: docIdA, document_id_b: docIdB }, headers: getAuthHeaders() });
 
-export async function deleteDocument(documentId) {
-  const response = await fetch(`${API_BASE}/documents/${documentId}`, { method: 'DELETE', headers: getAuthHeaders() });
-  if (!response.ok) throw new Error('Failed to delete document');
-  return response.json();
-}
+// Admin
+export const cleanupOldJobs = () =>
+  api('/admin/cleanup', { method: 'POST', headers: getAuthHeaders() });
 
-export async function chatWithDocument(documentId, question) {
-  const response = await fetch(`${API_BASE}/documents/${documentId}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ question, document_id: documentId }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Chat failed');
-  }
-  return response.json();
-}
-
-export async function getChatHistory(documentId) {
-  const response = await fetch(`${API_BASE}/documents/${documentId}/chat/history`, { headers: getAuthHeaders() });
-  if (!response.ok) throw new Error('Failed to get chat history');
-  return response.json();
-}
-
-export async function compareDocuments(docIdA, docIdB) {
-  const response = await fetch(`${API_BASE}/documents/compare`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ document_id_a: docIdA, document_id_b: docIdB }),
-  });
-  if (!response.ok) throw new Error('Comparison failed');
-  return response.json();
-}
-
-export async function batchUpload(documents) {
-  const response = await fetch(`${API_BASE}/session/batch-upload`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ documents }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Batch upload failed');
-  }
-  return response.json();
-}
-
+// WebSocket
 export function connectWebSocket(jobId, { onMessage, onError }) {
+  const host = import.meta.env.VITE_API_URL
+    ? import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')
+    : window.location.host;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = import.meta.env.VITE_API_URL
-    ? `${protocol}//${import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')}/ws/analysis/${jobId}`
-    : `${protocol}//${window.location.host}/api/ws/analysis/${jobId}`;
+  const wsUrl = `${protocol}//${host}/ws/analysis/${jobId}`;
   const ws = new WebSocket(wsUrl);
 
   let pingInterval = null;
 
   ws.onopen = () => {
     pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send('ping');
-      }
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
     }, 30000);
   };
 
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      if (data.type !== 'pong') {
-        onMessage(data);
-      }
-    } catch (e) {}
+      if (data.type !== 'pong') onMessage(data);
+    } catch (e) { /* ignore */ }
   };
 
-  ws.onerror = (event) => {
-    if (onError) onError(event);
-  };
+  ws.onerror = (event) => { if (onError) onError(event); };
 
-  ws.onclose = () => {
-    if (pingInterval) clearInterval(pingInterval);
-  };
+  ws.onclose = () => { if (pingInterval) clearInterval(pingInterval); };
 
   return {
     stop: () => {
       if (pingInterval) clearInterval(pingInterval);
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close();
-      }
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
     },
   };
 }
 
+// Polling
 export function pollJobStatus(jobId, intervalMs, onProgress) {
   let intervalId = null;
   let stopped = false;
@@ -189,10 +137,8 @@ export function pollJobStatus(jobId, intervalMs, onProgress) {
     try {
       const status = await fetchJobStatus(jobId);
       onProgress(status);
-      if (status.status === 'completed' || status.status === 'error') {
-        stop();
-      }
-    } catch (e) {}
+      if (status.status === 'completed' || status.status === 'error') stop();
+    } catch (e) { /* ignore */ }
   };
 
   intervalId = setInterval(poll, intervalMs);
