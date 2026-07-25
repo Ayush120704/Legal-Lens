@@ -17,6 +17,9 @@ services:
         generateValue: true
       - key: ALLOWED_ORIGINS
         value: https://ailegalanalyzer.vercel.app
+      # IMPORTANT: SQLite below is ephemeral and will be wiped on restart.
+      # For persisted data, set DATABASE_URL as a Render env var with a PostgreSQL
+      # connection string (e.g. from Neon, Supabase, or Render Blueprint Postgres).
       - key: DATABASE_URL
         value: sqlite:///./legal_analyzer.db
       - key: OPENAI_API_KEY

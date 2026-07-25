@@ -173,12 +173,20 @@ async def startup_event():
         if os.getenv("SECRET_KEY", "").startswith("change-this-to"):
             print("WARNING: SECRET_KEY is still the placeholder! Set it as an environment variable.")
         if "sqlite" in settings.DATABASE_URL:
-            print("WARNING: Using SQLite in production. Switch to PostgreSQL for concurrent users.")
+            print("WARNING: Using SQLite in production — data is ephemeral! Switch to PostgreSQL for persistence.")
         if not settings.ALLOWED_ORIGINS or all("localhost" in o for o in settings.ALLOWED_ORIGINS):
             print("WARNING: ALLOWED_ORIGINS only contains localhost. Set it to your frontend domain.")
     init_db()
+    try:
+        from sqlalchemy import text
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        print(f"Database OK ({'PostgreSQL' if 'postgresql' in settings.DATABASE_URL else 'SQLite'})")
+    except Exception as e:
+        print(f"Database connection failed: {e}")
     asyncio.create_task(_periodic_cleanup())
-    print("Database initialized. Heavy models (scoring, vector store) will load on first use.")
+    print("Heavy models (scoring, vector store) will load on first use.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -188,7 +196,16 @@ async def shutdown_event():
 # --- Health ---
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "legallens", "version": "2.0.0"}
+    db_ok = False
+    try:
+        from sqlalchemy import text
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        db_ok = True
+    except Exception:
+        pass
+    return {"status": "healthy", "service": "legallens", "version": "2.0.0", "database": "connected" if db_ok else "disconnected", "db_type": "postgresql" if "postgresql" in settings.DATABASE_URL else "sqlite"}
 
 # ==================== AUTH ROUTES ====================
 
