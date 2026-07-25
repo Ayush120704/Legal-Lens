@@ -317,10 +317,13 @@ async def list_documents(user: User = Depends(get_current_user), db: Session = D
     } for d in docs]
 
 @app.get("/api/documents/{document_id}")
-async def get_document(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == document_id, Document.user_id == user.id).first()
+async def get_document(document_id: int, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id is not None:
+        if not user or user.id != doc.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     clauses = db.query(Clause).filter(Clause.document_id == doc.id).order_by(Clause.clause_index).all()
     return {
         "id": doc.id,
@@ -364,11 +367,14 @@ async def delete_document(document_id: int, user: User = Depends(get_current_use
 # ==================== EXPORT ROUTES ====================
 
 @app.get("/api/documents/{document_id}/export/csv")
-async def export_document_csv(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def export_document_csv(document_id: int, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
     from export_service import generate_csv_report
-    doc = db.query(Document).filter(Document.id == document_id, Document.user_id == user.id).first()
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id is not None:
+        if not user or user.id != doc.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     clauses = db.query(Clause).filter(Clause.document_id == doc.id).order_by(Clause.clause_index).all()
     clause_dicts = [{
         "original_text": c.original_text, "suggested_text": c.suggested_text or "",
@@ -381,11 +387,14 @@ async def export_document_csv(document_id: int, user: User = Depends(get_current
     return StreamingResponse(io.StringIO(csv_content), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=legallens_report_{doc.id}.csv"})
 
 @app.get("/api/documents/{document_id}/export/txt")
-async def export_document_txt(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def export_document_txt(document_id: int, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
     from export_service import generate_txt_report
-    doc = db.query(Document).filter(Document.id == document_id, Document.user_id == user.id).first()
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id is not None:
+        if not user or user.id != doc.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     clauses = db.query(Clause).filter(Clause.document_id == doc.id).order_by(Clause.clause_index).all()
     clause_dicts = [{
         "original_text": c.original_text, "suggested_text": c.suggested_text or "",
@@ -399,12 +408,15 @@ async def export_document_txt(document_id: int, user: User = Depends(get_current
 # ==================== CHAT ROUTES ====================
 
 @app.post("/api/documents/{document_id}/chat")
-async def chat_with_document(document_id: int, req: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def chat_with_document(document_id: int, req: ChatRequest, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
     from llm_service import llm_service
     from local_chat import answer_question_locally
-    doc = db.query(Document).filter(Document.id == document_id, Document.user_id == user.id).first()
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id is not None:
+        if not user or user.id != doc.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     clauses = db.query(Clause).filter(Clause.document_id == doc.id).order_by(Clause.clause_index).all()
     clause_dicts = [{
         "original_text": c.original_text,
@@ -435,22 +447,28 @@ async def chat_with_document(document_id: int, req: ChatRequest, user: User = De
     return {"question": req.question, "answer": answer, "message_id": assistant_msg.id}
 
 @app.get("/api/documents/{document_id}/chat/history")
-async def get_chat_history(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == document_id, Document.user_id == user.id).first()
+async def get_chat_history(document_id: int, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id is not None:
+        if not user or user.id != doc.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     messages = db.query(ChatMessage).filter(ChatMessage.document_id == doc.id).order_by(ChatMessage.created_at).all()
     return [{"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at.isoformat()} for m in messages]
 
 # ==================== COMPARISON ROUTES ====================
 
 @app.post("/api/documents/compare")
-async def compare_documents(req: CompareRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def compare_documents(req: CompareRequest, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
     from llm_service import llm_service
-    doc_a = db.query(Document).filter(Document.id == req.document_id_a, Document.user_id == user.id).first()
-    doc_b = db.query(Document).filter(Document.id == req.document_id_b, Document.user_id == user.id).first()
+    doc_a = db.query(Document).filter(Document.id == req.document_id_a).first()
+    doc_b = db.query(Document).filter(Document.id == req.document_id_b).first()
     if not doc_a or not doc_b:
         raise HTTPException(status_code=404, detail="One or both documents not found")
+    for d in (doc_a, doc_b):
+        if d.user_id is not None and (not user or user.id != d.user_id):
+            raise HTTPException(status_code=403, detail="Access denied")
     clauses_a = db.query(Clause).filter(Clause.document_id == doc_a.id).order_by(Clause.clause_index).all()
     clauses_b = db.query(Clause).filter(Clause.document_id == doc_b.id).order_by(Clause.clause_index).all()
     comparison = []
