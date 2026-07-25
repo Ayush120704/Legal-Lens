@@ -105,7 +105,11 @@ class ChatMessage(Base):
 
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        if "already exists" not in str(e):
+            raise
 
 
 def get_db():
