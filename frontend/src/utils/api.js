@@ -1,8 +1,8 @@
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `${import.meta.env.VITE_API_URL}/api`
-  : '/api';
-
-export const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+// VITE_API_URL must be set at build time (Vite inlines it).
+// Without it, relative /api/* calls go to the same host with no proxy.
+const _apiUrl = import.meta.env.VITE_API_URL;
+const API_BASE = _apiUrl ? `${_apiUrl}/api` : '/api';
+export const BASE_URL = _apiUrl || '/api';
 
 export function getAuthHeaders() {
   const token = localStorage.getItem('token');
@@ -93,11 +93,11 @@ export const cleanupOldJobs = () =>
 
 // WebSocket
 export function connectWebSocket(jobId, { onMessage, onError }) {
-  const host = import.meta.env.VITE_API_URL
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsHost = import.meta.env.VITE_API_URL
     ? import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')
     : window.location.host;
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${host}/ws/analysis/${jobId}`;
+  const wsUrl = `${protocol}//${wsHost}/ws/analysis/${jobId}`;
   const ws = new WebSocket(wsUrl);
 
   let pingInterval = null;
