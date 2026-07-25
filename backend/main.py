@@ -8,6 +8,7 @@ import csv
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 # Ensure backend directory is on Python path when run from project root
 _backend_dir = str(Path(__file__).resolve().parent)
@@ -263,13 +264,15 @@ async def upload_document(
     client_ip = "anonymous"
     if not _check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
-    job_id = memory_store.create_job()
+    # Write Document to DB first so the record exists even if the server restarts.
+    job_id = str(uuid4())
     doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text, title="Pasted Document")
     db.add(doc)
     db.commit()
     db.refresh(doc)
     doc.status = "processing"
     db.commit()
+    memory_store.create_job(job_id=job_id)
     memory_store.update_job(job_id, user_id=user.id if user else None)
     background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": "Analysis started."}
@@ -316,20 +319,20 @@ async def upload_file(
     if len(text) > _MAX_TEXT_LENGTH:
         raise HTTPException(status_code=413, detail=f"Document text exceeds {_MAX_TEXT_LENGTH} character limit")
     text = sanitize_text(text)
-    job_id = memory_store.create_job()
+    job_id = str(uuid4())
     doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text, title=file.filename)
     db.add(doc)
     db.commit()
     db.refresh(doc)
     doc.status = "processing"
     db.commit()
+    memory_store.create_job(job_id=job_id)
     memory_store.update_job(job_id, user_id=user.id if user else None)
     background_tasks.add_task(analyze_document, job_id, text, doc.id)
     return {"job_id": job_id, "document_id": doc.id, "message": f"Analysis started for {file.filename}."}
 
 @app.get("/api/session/status/{job_id}")
 async def get_job_status(job_id: str, user: Optional[User] = Depends(get_optional_user), db: Session = Depends(get_db)):
-    # Check in-memory store first (fast path while analysis is running)
     job = memory_store.get_job(job_id)
     if job is not None:
         job_owner = job.get("user_id")
@@ -337,8 +340,13 @@ async def get_job_status(job_id: str, user: Optional[User] = Depends(get_optiona
             if not user or user.id != job_owner:
                 raise HTTPException(status_code=403, detail="Access denied")
         return job
-    # Fallback to database (survives server restarts / spin-downs)
-    doc = db.query(Document).filter(Document.job_id == job_id).first()
+    # Retry once after a short pause in case of DB write propagation delay
+    for attempt in range(2):
+        doc = db.query(Document).filter(Document.job_id == job_id).first()
+        if doc is not None:
+            break
+        if attempt == 0:
+            await asyncio.sleep(0.3)
     if doc is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if doc.user_id is not None:
@@ -541,13 +549,16 @@ async def batch_upload(req: BatchUploadRequest, background_tasks: BackgroundTask
     for i, text in enumerate(req.documents):
         if not text.strip():
             continue
-        job_id = memory_store.create_job()
+        job_id = str(uuid4())
         doc = Document(job_id=job_id, user_id=user.id if user else None, original_text=text.strip(), title=f"Batch Document {i + 1}")
         db.add(doc)
         db.flush()
         background_tasks.add_task(analyze_document, job_id, text.strip(), doc.id)
         results.append({"job_id": job_id, "document_id": doc.id, "title": f"Batch Document {i + 1}"})
     db.commit()
+    for r in results:
+        memory_store.create_job(job_id=r["job_id"])
+        memory_store.update_job(r["job_id"], user_id=user.id if user else None)
     return {"message": f"Started analysis for {len(results)} documents", "documents": results}
 
 # ==================== WEBSOCKET ====================
