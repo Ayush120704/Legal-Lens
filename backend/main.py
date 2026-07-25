@@ -156,11 +156,11 @@ def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PE
 
 # --- Startup ---
 async def _periodic_cleanup():
-    """Free memory every 60s by evicting finished in-memory jobs and stale connections."""
+    """Free memory every 30s by evicting finished in-memory jobs and stale connections."""
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
         try:
-            count = memory_store.cleanup_finished_jobs()
+            memory_store.cleanup_finished_jobs()
             manager.cleanup_stale()
         except Exception:
             pass

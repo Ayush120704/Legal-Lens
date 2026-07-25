@@ -219,6 +219,7 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
             db.commit()
 
             state_store.clear_clauses(job_id)
+            analyzed_clauses.clear()
 
     except Exception as e:
         state_store.set_error(job_id, str(e))

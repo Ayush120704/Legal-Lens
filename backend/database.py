@@ -9,7 +9,7 @@ class InMemoryStateStore:
     Automatically reclaims memory by removing finished jobs after a timeout.
     """
 
-    MEMORY_CLEANUP_AGE = 120
+    MEMORY_CLEANUP_AGE = 60
 
     def __init__(self):
         self._lock = threading.Lock()
