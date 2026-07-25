@@ -140,7 +140,7 @@ export function connectWebSocket(jobId, { onMessage, onError }) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = import.meta.env.VITE_API_URL
     ? `${protocol}//${import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')}/ws/analysis/${jobId}`
-    : `${protocol}//${window.location.host}/ws/analysis/${jobId}`;
+    : `${protocol}//${window.location.host}/api/ws/analysis/${jobId}`;
   const ws = new WebSocket(wsUrl);
 
   let pingInterval = null;
