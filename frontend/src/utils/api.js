@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api';
 
 export function getAuthHeaders() {
   const token = localStorage.getItem('token');
@@ -135,12 +137,9 @@ export async function batchUpload(documents) {
 }
 
 export function connectWebSocket(jobId, { onMessage, onError }) {
-  const wsBase = import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/^http/, 'ws')
-    : null;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = wsBase
-    ? `${wsBase}/ws/analysis/${jobId}`
+  const wsUrl = import.meta.env.VITE_API_URL
+    ? `${protocol}//${import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')}/ws/analysis/${jobId}`
     : `${protocol}//${window.location.host}/ws/analysis/${jobId}`;
   const ws = new WebSocket(wsUrl);
 
