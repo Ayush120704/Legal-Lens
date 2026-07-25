@@ -143,11 +143,11 @@ def _compute_quality_scores(text: str, flags: List[str], category: str) -> Dict[
 
     # Clarity: penalize very short or very long clauses
     clarity_score = 0
-    if word_count < 10:
+    if word_count < 5:
         clarity_score = -2
-    elif word_count < 20:
+    elif word_count < 15:
         clarity_score = -1
-    elif 20 <= word_count <= 60:
+    elif 15 <= word_count <= 60:
         clarity_score = 1
     else:
         clarity_score = 0
@@ -513,11 +513,11 @@ def split_into_clauses(text: str) -> List[str]:
     # Fallback: split by double newlines if section splitting failed
     if len(clauses) < 2:
         paragraphs = re.split(r'\n\s*\n', text.strip())
-        clauses = [p.strip() for p in paragraphs if len(p.strip().split()) >= 3]
+        clauses = [p.strip() for p in paragraphs if len(p.strip().split()) >= 2]
 
     # Final fallback: split by single newlines
     if len(clauses) < 2:
         lines = text.strip().split('\n')
-        clauses = [l.strip() for l in lines if len(l.strip().split()) >= 3]
+        clauses = [l.strip() for l in lines if len(l.strip().split()) >= 2]
 
     return clauses if clauses else [text.strip()]
