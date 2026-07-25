@@ -141,20 +141,16 @@ def _compute_document_summary(clauses: List[Dict[str, Any]], risk_summary: Dict[
 async def analyze_document(job_id: str, text: str, document_id: Optional[int] = None, db_session=None):
     db = None
     try:
-        if db_session is not None:
-            db = db_session
-        elif document_id is not None:
-            db = SessionLocal()
-
         from scoring import split_into_clauses
-        clauses = split_into_clauses(text)
-        total = len(clauses)
+        clauses_text = split_into_clauses(text)
+        total = len(clauses_text)
         state_store.set_total_clauses(job_id, total)
 
         scoring_engine = _get_scoring_engine()
         vector_store_inst = _get_vector_store()
 
-        for i, clause_text in enumerate(clauses):
+        analyzed_clauses = []
+        for i, clause_text in enumerate(clauses_text):
             clause_result = scoring_engine.score_clause(clause_text)
             compliance_matches = vector_store_inst.query(clause_text, n_results=3)
             clause_result["compliance_matches"] = compliance_matches
@@ -168,8 +164,30 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
                     clause_result["suggested_text"] = llm_analysis["suggested_text"]
 
             state_store.append_clause(job_id, clause_result)
+            analyzed_clauses.append(clause_result)
+            await asyncio.sleep(0.1)
 
-            if db is not None and document_id is not None:
+        risk_summary = _compute_risk_summary(analyzed_clauses)
+        document_summary = _compute_document_summary(analyzed_clauses, risk_summary)
+
+        if llm_service.available:
+            clauses_for_llm = "\n".join([
+                f"Clause {i+1} [{c.get('risk_level','N/A')}]: {c.get('original_text','')[:300]}"
+                for i, c in enumerate(analyzed_clauses[:20])
+            ])
+            llm_summary = llm_service.generate_document_summary(clauses_for_llm)
+            if llm_summary:
+                document_summary["llm_executive_summary"] = llm_summary
+
+        state_store.set_completed(job_id, risk_summary, document_summary)
+
+        if document_id is not None:
+            if db_session is not None:
+                db = db_session
+            else:
+                db = SessionLocal()
+
+            for i, clause_result in enumerate(analyzed_clauses):
                 db_clause = Clause(
                     document_id=document_id,
                     clause_index=i,
@@ -185,31 +203,11 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
                     pros=clause_result.get("pros", []),
                     cons=clause_result.get("cons", []),
                     quality=clause_result.get("quality", {}),
-                    compliance_matches=compliance_matches,
+                    compliance_matches=clause_result.get("compliance_matches", []),
                     llm_analysis=clause_result.get("llm_analysis"),
                 )
                 db.add(db_clause)
 
-            await asyncio.sleep(0.1)
-
-        job_data = state_store.get_job(job_id)
-        all_clauses = job_data["clauses"]
-
-        risk_summary = _compute_risk_summary(all_clauses)
-        document_summary = _compute_document_summary(all_clauses, risk_summary)
-
-        if llm_service.available:
-            clauses_for_llm = "\n".join([
-                f"Clause {i+1} [{c.get('risk_level','N/A')}]: {c.get('original_text','')[:300]}"
-                for i, c in enumerate(all_clauses[:20])
-            ])
-            llm_summary = llm_service.generate_document_summary(clauses_for_llm)
-            if llm_summary:
-                document_summary["llm_executive_summary"] = llm_summary
-
-        state_store.set_completed(job_id, risk_summary, document_summary)
-
-        if db is not None and document_id is not None:
             db_doc = db.query(Document).filter(Document.id == document_id).first()
             if db_doc:
                 db_doc.status = "completed"
@@ -220,15 +218,22 @@ async def analyze_document(job_id: str, text: str, document_id: Optional[int] = 
                 db_doc.document_summary = document_summary
             db.commit()
 
+            state_store.clear_clauses(job_id)
+
     except Exception as e:
         state_store.set_error(job_id, str(e))
-        if db is not None and document_id is not None:
+        if document_id is not None:
             try:
-                db_doc = db.query(Document).filter(Document.id == document_id).first()
-                if db_doc:
-                    db_doc.status = "error"
-                    db_doc.error_message = str(e)
-                db.commit()
+                if db_session is not None:
+                    db = db_session
+                elif db is None:
+                    db = SessionLocal()
+                if db is not None:
+                    db_doc = db.query(Document).filter(Document.id == document_id).first()
+                    if db_doc:
+                        db_doc.status = "error"
+                        db_doc.error_message = str(e)
+                    db.commit()
             except Exception:
                 pass
         print(f"Analysis failed for job {job_id}: {e}")

@@ -53,12 +53,14 @@ async def add_security_headers(request, call_next):
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, list[WebSocket]] = {}
+        self._lock = asyncio.Lock()
 
     async def connect(self, job_id: str, websocket: WebSocket):
         await websocket.accept()
-        if job_id not in self.active_connections:
-            self.active_connections[job_id] = []
-        self.active_connections[job_id].append(websocket)
+        async with self._lock:
+            if job_id not in self.active_connections:
+                self.active_connections[job_id] = []
+            self.active_connections[job_id].append(websocket)
 
     def disconnect(self, job_id: str, websocket: WebSocket):
         if job_id in self.active_connections:
@@ -77,6 +79,11 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(job_id, ws)
+
+    def cleanup_stale(self):
+        dead_jobs = [jid for jid, conns in self.active_connections.items() if not conns]
+        for jid in dead_jobs:
+            del self.active_connections[jid]
 
 manager = ConnectionManager()
 
@@ -133,8 +140,8 @@ _last_rate_cleanup: float = time.time()
 def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PER_MINUTE, window: int = 60) -> bool:
     global _last_rate_cleanup
     now = time.time()
-    if now - _last_rate_cleanup > 300:
-        cutoff = now - 120
+    if now - _last_rate_cleanup > 60:
+        cutoff = now - window
         expired = [k for k, v in _rate_limit_store.items() if v and max(v) < cutoff]
         for k in expired:
             del _rate_limit_store[k]
@@ -148,6 +155,16 @@ def _check_rate_limit(client_id: str, max_requests: int = settings.RATE_LIMIT_PE
     return True
 
 # --- Startup ---
+async def _periodic_cleanup():
+    """Free memory every 60s by evicting finished in-memory jobs and stale connections."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            count = memory_store.cleanup_finished_jobs()
+            manager.cleanup_stale()
+        except Exception:
+            pass
+
 @app.on_event("startup")
 async def startup_event():
     is_prod = any(k in os.environ for k in ("RENDER", "RAILWAY_SERVICE_ID", "FLY_APP_NAME"))
@@ -159,6 +176,7 @@ async def startup_event():
         if not settings.ALLOWED_ORIGINS or all("localhost" in o for o in settings.ALLOWED_ORIGINS):
             print("WARNING: ALLOWED_ORIGINS only contains localhost. Set it to your frontend domain.")
     init_db()
+    asyncio.create_task(_periodic_cleanup())
     print("Database initialized. Heavy models (scoring, vector store) will load on first use.")
 
 @app.on_event("shutdown")

@@ -1,19 +1,26 @@
 import threading
+import time
 import uuid
 from typing import Any, Dict, Optional, List
 
 
 class InMemoryStateStore:
-    """Thread-safe in-memory state store for managing analysis job lifecycle."""
+    """Thread-safe in-memory state store for managing analysis job lifecycle.
+    Automatically reclaims memory by removing finished jobs after a timeout.
+    """
+
+    MEMORY_CLEANUP_AGE = 120
 
     def __init__(self):
         self._lock = threading.Lock()
         self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._job_timestamps: Dict[str, float] = {}
 
     def create_job(self, job_id: Optional[str] = None) -> str:
         """Create a new analysis job and return its ID."""
         if job_id is None:
             job_id = str(uuid.uuid4())
+        now = time.time()
         with self._lock:
             self._jobs[job_id] = {
                 "job_id": job_id,
@@ -30,6 +37,7 @@ class InMemoryStateStore:
                 },
                 "document_summary": None,
             }
+            self._job_timestamps[job_id] = now
         return job_id
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -76,6 +84,7 @@ class InMemoryStateStore:
             self._jobs[job_id]["progress"] = 100
             self._jobs[job_id]["risk_summary"] = risk_summary
             self._jobs[job_id]["document_summary"] = document_summary
+            self._job_timestamps[job_id] = time.time()
 
     def set_error(self, job_id: str, error_message: str):
         """Mark a job as failed with error details."""
@@ -84,6 +93,26 @@ class InMemoryStateStore:
                 return
             self._jobs[job_id]["status"] = "error"
             self._jobs[job_id]["error"] = error_message
+            self._job_timestamps[job_id] = time.time()
+
+    def clear_clauses(self, job_id: str):
+        """Remove clause data from memory once persisted to DB."""
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["clauses"] = []
+
+    def cleanup_finished_jobs(self):
+        """Evict completed/errored jobs older than MEMORY_CLEANUP_AGE seconds."""
+        now = time.time()
+        with self._lock:
+            expired = [
+                jid for jid, job in self._jobs.items()
+                if job["status"] in ("completed", "error")
+                and (now - self._job_timestamps.get(jid, 0)) > self.MEMORY_CLEANUP_AGE
+            ]
+            for jid in expired:
+                del self._jobs[jid]
+                self._job_timestamps.pop(jid, None)
 
     def get_summary(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get a lightweight status summary without full clause payloads."""
