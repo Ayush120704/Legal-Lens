@@ -7,6 +7,16 @@ export default defineConfig(() => {
 
   return {
     plugins: [react()],
+    build: {
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            three: ['three'],
+          },
+        },
+      },
+    },
     server: {
       port: 3000,
       proxy: {
